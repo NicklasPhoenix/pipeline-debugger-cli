@@ -33,11 +33,27 @@ program
 program
   .command('status')
   .description('Show local CLI auth status')
-  .action(() => {
+  .option('--api <url>', 'Web API base URL', 'https://pipeline-debugger.vercel.app')
+  .option('--remote', 'Also verify token by calling the web API')
+  .action(async (opts) => {
     const cfg = getConfig();
     if (cfg.token) {
       console.log('Authenticated: yes');
       console.log(`Token: ${cfg.token.slice(0, 6)}…${cfg.token.slice(-4)}`);
+
+      if (opts.remote) {
+        const res = await fetch(`${opts.api}/api/workflows`, {
+          headers: {
+            Authorization: `Bearer ${cfg.token}`,
+          },
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`Remote auth check failed (${res.status}): ${text}`);
+        }
+        const data = (await res.json()) as { workflows: unknown[] };
+        console.log(`Remote API check: OK (workflows: ${data.workflows.length})`);
+      }
     } else {
       console.log('Authenticated: no');
       console.log('Run: pdbg login');
