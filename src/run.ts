@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import yaml from 'js-yaml';
 import { executeWorkflowInDocker } from './lib/docker-executor.js';
+import { executeWorkflowWithAct } from './lib/act-executor.js';
 import { type DockerConfig } from './lib/docker-config.js';
 
 type WorkflowStep = {
@@ -37,26 +38,60 @@ function pickJob(doc: WorkflowDoc, jobId?: string): { jobId: string; job: Workfl
 
 export async function runWorkflowFile(params: {
   workflowPath: string;
-  image: string;
+  image?: string;
   jobId?: string;
+  engine?: 'builtin' | 'act';
+  eventName?: string;
+  eventPath?: string;
+  secretFile?: string;
+  varsFile?: string;
+  platforms?: string[];
   workdir?: string;
   dockerConfig?: DockerConfig;
 }): Promise<number> {
-  const { workflowPath, image, jobId } = params;
+  const {
+    workflowPath,
+    image,
+    jobId,
+    engine = 'builtin',
+    eventName,
+    eventPath,
+    secretFile,
+    varsFile,
+    platforms,
+  } = params;
 
   const content = await readFile(workflowPath, 'utf8');
   const doc = yaml.load(content) as WorkflowDoc;
   const picked = pickJob(doc, jobId);
 
-  const steps = picked.job.steps ?? [];
-
   console.log(`Workflow: ${doc.name ?? '(unnamed)'} | Job: ${picked.jobId}${picked.job.name ? ` (${picked.job.name})` : ''}`);
-  console.log(`Image: ${image}`);
 
   const workdir = params.workdir ?? process.cwd();
 
+  if (engine === 'act') {
+    const result = await executeWorkflowWithAct({
+      workflowPath,
+      jobId: picked.jobId,
+      eventName,
+      eventPath,
+      secretFile,
+      varsFile,
+      platforms,
+      workdir,
+      dockerConfig: params.dockerConfig,
+    });
+
+    return result.exitCode;
+  }
+
+  const steps = picked.job.steps ?? [];
+  const resolvedImage = image ?? 'ubuntu:latest';
+
+  console.log(`Image: ${resolvedImage}`);
+
   const result = await executeWorkflowInDocker({
-    image,
+    image: resolvedImage,
     steps,
     workdir,
     dockerConfig: params.dockerConfig,

@@ -561,8 +561,17 @@ program
   .command('run')
   .argument('[workflow.yml]', 'Path to GitHub Actions workflow YAML')
   .description('Run a workflow file locally in Docker')
-  .option('--image <image>', 'Docker image to use', 'ubuntu:latest')
+  .option('--engine <engine>', 'Execution engine (builtin|act)', 'builtin')
+  .option('--image <image>', 'Docker image to use (builtin engine)', 'ubuntu:latest')
   .option('--job <jobId>', 'Job id to run (defaults to first job)')
+  .option('--event <name>', 'GitHub event name (act engine)', 'push')
+  .option('--eventpath <path>', 'GitHub event payload JSON (act engine)')
+  .option('--secret-file <path>', 'act secrets file')
+  .option('--var-file <path>', 'act vars file')
+  .option('-P, --platform <mapping>', 'Platform mapping for act (repeatable)', (value, previous: string[] = []) => {
+    previous.push(value);
+    return previous;
+  })
   .option('--docker-host <host>', 'Remote Docker engine (e.g. tcp://host:2376)')
   .option('--docker-tls-verify', 'Verify TLS (uses DOCKER_CERT_PATH)')
   .option('--docker-cert-path <path>', 'Path to Docker certs (directory)')
@@ -584,9 +593,19 @@ program
         path = ans.path;
       }
 
+      const engine = String(opts.engine ?? 'builtin');
+      if (!['builtin', 'act'].includes(engine)) {
+        throw new Error('engine must be one of: builtin, act');
+      }
+
       ui.title('Run workflow');
       ui.info(`File: ${path}`);
-      ui.info(`Image: ${opts.image}`);
+      ui.info(`Engine: ${engine}`);
+      if (engine === 'builtin') {
+        ui.info(`Image: ${opts.image}`);
+      } else {
+        ui.info(`Event: ${opts.event}`);
+      }
 
       if (!path) throw new Error('Workflow path is required');
 
@@ -597,6 +616,12 @@ program
         workflowPath: path,
         image: opts.image,
         jobId: opts.job,
+        engine: engine as 'builtin' | 'act',
+        eventName: opts.event,
+        eventPath: opts.eventpath,
+        secretFile: opts.secretFile,
+        varsFile: opts.varFile,
+        platforms: opts.platform,
         dockerConfig,
       });
 

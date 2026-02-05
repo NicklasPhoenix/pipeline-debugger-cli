@@ -5,6 +5,7 @@ import { nanoid } from 'nanoid';
 
 import { getConfig, saveConfig } from './config.js';
 import { executeWorkflowInDocker, type WorkflowStep } from './docker-executor.js';
+import { executeWorkflowWithAct } from './act-executor.js';
 import { listProjects, selectProject, getActiveProject, type Project } from './projects.js';
 import { scanWorkflows } from './workflow-scan.js';
 import { loadWorkflowDoc, pickJob } from './workflow-parse.js';
@@ -27,19 +28,28 @@ export type DaemonConfig = {
 
 type RunStatus = 'queued' | 'running' | 'success' | 'failed';
 
+type RunEngine = 'builtin' | 'act';
+
 type RunRecord = {
   id: string;
   createdAt: number;
   updatedAt: number;
   status: RunStatus;
+  engine: RunEngine;
 
   projectId?: string;
   projectRoot?: string;
   workflowPath?: string;
   jobId?: string;
 
-  image: string;
-  steps: WorkflowStep[];
+  eventName?: string;
+  eventPath?: string;
+  secretFile?: string;
+  varsFile?: string;
+  platforms?: string[];
+
+  image?: string;
+  steps?: WorkflowStep[];
   exitCode?: number;
 
   // Combined log output (kept in memory)
@@ -97,6 +107,15 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
 
   const runs = new Map<string, RunRecord>();
   const clients = new Set<WsClient>();
+  const MAX_LOG_BYTES = 5 * 1024 * 1024;
+
+  function appendLog(run: RunRecord, chunk: string) {
+    run.log = `${run.log ?? ''}${chunk}`;
+    if (run.log.length > MAX_LOG_BYTES) {
+      run.log = run.log.slice(run.log.length - MAX_LOG_BYTES);
+    }
+    broadcast({ type: 'run.log', id: run.id, chunk });
+  }
 
   function authOrThrow(req: any) {
     const header = (req.headers['x-pdbg-token'] as string | undefined) ?? '';
@@ -178,16 +197,22 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
     authOrThrow(req);
 
     const body = (req.body ?? {}) as {
+      engine?: RunEngine;
       image?: string;
       // Either supply explicit steps, OR supply workflowPath + jobId and we'll parse.
       steps?: WorkflowStep[];
       workflowPath?: string;
       jobId?: string;
       projectId?: string;
+      eventName?: string;
+      eventPath?: string;
+      secretFile?: string;
+      varsFile?: string;
+      platforms?: string[];
     };
 
     const id = nanoid(12);
-    const image = body.image ?? 'ubuntu:latest';
+    const engine: RunEngine = body.engine ?? 'builtin';
 
     let project: Project | null = null;
     if (body.projectId) {
@@ -197,15 +222,31 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
     }
 
     let steps: WorkflowStep[] = body.steps ?? [];
+    let workflowPath = body.workflowPath;
+    let jobId = body.jobId;
 
-    if (steps.length === 0 && body.workflowPath) {
+    if (engine === 'builtin') {
+      if (steps.length === 0 && workflowPath) {
+        if (!project) {
+          throw new Error('No active project. Run: pdbg project add <path>');
+        }
+        const abs = resolve(join(project.rootPath, workflowPath));
+        const doc = await loadWorkflowDoc(abs);
+        const picked = pickJob(doc, body.jobId);
+        steps = (picked.job.steps ?? []) as WorkflowStep[];
+        jobId = picked.jobId;
+      }
+    } else {
+      if (!workflowPath) {
+        throw new Error('workflowPath is required for act engine');
+      }
       if (!project) {
         throw new Error('No active project. Run: pdbg project add <path>');
       }
-      const abs = resolve(join(project.rootPath, body.workflowPath));
+      const abs = resolve(join(project.rootPath, workflowPath));
       const doc = await loadWorkflowDoc(abs);
       const picked = pickJob(doc, body.jobId);
-      steps = (picked.job.steps ?? []) as WorkflowStep[];
+      jobId = picked.jobId;
     }
 
     const run: RunRecord = {
@@ -213,10 +254,16 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       status: 'queued',
-      image,
-      steps,
-      workflowPath: body.workflowPath,
-      jobId: body.jobId,
+      engine,
+      image: engine === 'builtin' ? body.image ?? 'ubuntu:latest' : undefined,
+      steps: engine === 'builtin' ? steps : undefined,
+      workflowPath,
+      jobId,
+      eventName: body.eventName,
+      eventPath: body.eventPath,
+      secretFile: body.secretFile,
+      varsFile: body.varsFile,
+      platforms: body.platforms,
       projectId: project?.id,
       projectRoot: project?.rootPath,
     };
@@ -231,21 +278,40 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
       broadcast({ type: 'run.updated', run });
 
       try {
-        const result = await executeWorkflowInDocker({
-          image: run.image,
-          steps: run.steps,
-          workdir: run.projectRoot,
-          dockerConfig: {
-            dockerHost: cfg.dockerHost,
-            dockerTlsVerify: cfg.dockerTlsVerify,
-            dockerCertPath: cfg.dockerCertPath,
-            dockerKeyPath: cfg.dockerKeyPath,
-            dockerCaPath: cfg.dockerCaPath,
-          },
-        });
+        const dockerConfig = {
+          dockerHost: cfg.dockerHost,
+          dockerTlsVerify: cfg.dockerTlsVerify,
+          dockerCertPath: cfg.dockerCertPath,
+          dockerKeyPath: cfg.dockerKeyPath,
+          dockerCaPath: cfg.dockerCaPath,
+        };
+
+        const result =
+          run.engine === 'act'
+            ? await executeWorkflowWithAct({
+                workflowPath: run.projectRoot && run.workflowPath
+                  ? resolve(join(run.projectRoot, run.workflowPath))
+                  : String(run.workflowPath),
+                jobId: run.jobId,
+                eventName: run.eventName,
+                eventPath: run.eventPath,
+                secretFile: run.secretFile,
+                varsFile: run.varsFile,
+                platforms: run.platforms,
+                workdir: run.projectRoot,
+                dockerConfig,
+                onOutput: (chunk) => appendLog(run, chunk),
+              })
+            : await executeWorkflowInDocker({
+                image: run.image ?? 'ubuntu:latest',
+                steps: run.steps ?? [],
+                workdir: run.projectRoot,
+                dockerConfig,
+                onOutput: (chunk) => appendLog(run, chunk),
+              });
 
         run.exitCode = result.exitCode;
-        run.log = result.log;
+        if (!run.log) run.log = result.log;
         run.status = result.exitCode === 0 ? 'success' : 'failed';
         run.updatedAt = Date.now();
         broadcast({ type: 'run.finished', run });
