@@ -1,6 +1,6 @@
 # pipeline-debugger-cli (pdbg)
 
-Run GitHub Actions workflows locally in Docker and connect them to the Pipeline Debugger dashboard.
+Run GitHub Actions workflows locally (act) or via GitHub runners, and connect them to the Pipeline Debugger dashboard.
 
 ## Install
 
@@ -38,6 +38,20 @@ Open https://pipeline-debugger.vercel.app/dashboard and paste the token printed 
 - `pdbg doctor` – check Docker, auth, and local runner status (`--fix` to install prerequisites)
 - `pdbg run <workflow.yml>` – run a workflow file directly
 
+## Engines
+
+- **act (default)**: full GitHub Actions support locally (requires `act` + Docker)
+- **github**: run on GitHub-hosted runners via `gh` CLI (requires `gh auth login`)
+- **builtin**: runs only `run:` steps (fast fallback; `uses:` skipped)
+
+Examples:
+
+```bash
+pdbg run .github/workflows/ci.yml --engine act
+pdbg run .github/workflows/ci.yml --engine github --repo owner/repo --ref main
+pdbg run .github/workflows/ci.yml --engine builtin --image node:20-bullseye
+```
+
 ## Remote Docker (optional)
 
 If your machine doesn’t have Docker, you can point the CLI to a remote Docker engine:
@@ -51,8 +65,9 @@ pdbg run .github/workflows/ci.yml --docker-host tcp://your-host:2376 --docker-tl
 
 ## Notes
 
-- Currently supports `jobs.<job>.steps[].run` commands.
-- `uses:` steps are skipped.
+- `builtin` engine supports `jobs.<job>.steps[].run` only; `uses:` is skipped.
+- `act` engine supports `uses:` and composite actions (requires Docker + act).
+- `github` engine runs workflows on GitHub-hosted runners (requires gh auth).
 
 ## License
 

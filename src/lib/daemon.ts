@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { getConfig, saveConfig } from './config.js';
 import { executeWorkflowInDocker, type WorkflowStep } from './docker-executor.js';
 import { executeWorkflowWithAct } from './act-executor.js';
+import { executeWorkflowWithGitHub } from './gh-executor.js';
 import { listProjects, selectProject, getActiveProject, type Project } from './projects.js';
 import { scanWorkflows } from './workflow-scan.js';
 import { loadWorkflowDoc, pickJob } from './workflow-parse.js';
@@ -28,7 +29,7 @@ export type DaemonConfig = {
 
 type RunStatus = 'queued' | 'running' | 'success' | 'failed';
 
-type RunEngine = 'builtin' | 'act';
+type RunEngine = 'builtin' | 'act' | 'github';
 
 type RunRecord = {
   id: string;
@@ -47,6 +48,10 @@ type RunRecord = {
   secretFile?: string;
   varsFile?: string;
   platforms?: string[];
+
+  repo?: string;
+  ref?: string;
+  inputs?: Record<string, string>;
 
   image?: string;
   steps?: WorkflowStep[];
@@ -209,10 +214,13 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
       secretFile?: string;
       varsFile?: string;
       platforms?: string[];
+      repo?: string;
+      ref?: string;
+      inputs?: Record<string, string>;
     };
 
     const id = nanoid(12);
-    const engine: RunEngine = body.engine ?? 'builtin';
+    const engine: RunEngine = body.engine ?? 'act';
 
     let project: Project | null = null;
     if (body.projectId) {
@@ -238,7 +246,7 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
       }
     } else {
       if (!workflowPath) {
-        throw new Error('workflowPath is required for act engine');
+        throw new Error('workflowPath is required for act/github engine');
       }
       if (!project) {
         throw new Error('No active project. Run: pdbg project add <path>');
@@ -264,6 +272,9 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
       secretFile: body.secretFile,
       varsFile: body.varsFile,
       platforms: body.platforms,
+      repo: body.repo,
+      ref: body.ref,
+      inputs: body.inputs,
       projectId: project?.id,
       projectRoot: project?.rootPath,
     };
@@ -300,6 +311,17 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
                 platforms: run.platforms,
                 workdir: run.projectRoot,
                 dockerConfig,
+                onOutput: (chunk) => appendLog(run, chunk),
+              })
+            : run.engine === 'github'
+            ? await executeWorkflowWithGitHub({
+                workflowPath: run.projectRoot && run.workflowPath
+                  ? resolve(join(run.projectRoot, run.workflowPath))
+                  : String(run.workflowPath),
+                repo: run.repo,
+                ref: run.ref,
+                inputs: run.inputs,
+                workdir: run.projectRoot,
                 onOutput: (chunk) => appendLog(run, chunk),
               })
             : await executeWorkflowInDocker({

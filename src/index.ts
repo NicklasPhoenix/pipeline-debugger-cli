@@ -561,7 +561,7 @@ program
   .command('run')
   .argument('[workflow.yml]', 'Path to GitHub Actions workflow YAML')
   .description('Run a workflow file locally in Docker')
-  .option('--engine <engine>', 'Execution engine (builtin|act)', 'builtin')
+  .option('--engine <engine>', 'Execution engine (builtin|act|github)', 'act')
   .option('--image <image>', 'Docker image to use (builtin engine)', 'ubuntu:latest')
   .option('--job <jobId>', 'Job id to run (defaults to first job)')
   .option('--event <name>', 'GitHub event name (act engine)', 'push')
@@ -569,6 +569,12 @@ program
   .option('--secret-file <path>', 'act secrets file')
   .option('--var-file <path>', 'act vars file')
   .option('-P, --platform <mapping>', 'Platform mapping for act (repeatable)', (value, previous: string[] = []) => {
+    previous.push(value);
+    return previous;
+  })
+  .option('--repo <owner/repo>', 'GitHub repo (github engine)')
+  .option('--ref <ref>', 'Git ref (github engine)')
+  .option('--input <key=value>', 'Workflow input (repeatable)', (value, previous: string[] = []) => {
     previous.push(value);
     return previous;
   })
@@ -593,18 +599,30 @@ program
         path = ans.path;
       }
 
-      const engine = String(opts.engine ?? 'builtin');
-      if (!['builtin', 'act'].includes(engine)) {
-        throw new Error('engine must be one of: builtin, act');
+      const engine = String(opts.engine ?? 'act');
+      if (!['builtin', 'act', 'github'].includes(engine)) {
+        throw new Error('engine must be one of: builtin, act, github');
       }
+
+      const inputs = Array.isArray(opts.input)
+        ? opts.input.reduce((acc: Record<string, string>, entry: string) => {
+            const [key, ...rest] = entry.split('=');
+            if (!key) return acc;
+            acc[key] = rest.join('=');
+            return acc;
+          }, {})
+        : undefined;
 
       ui.title('Run workflow');
       ui.info(`File: ${path}`);
       ui.info(`Engine: ${engine}`);
       if (engine === 'builtin') {
         ui.info(`Image: ${opts.image}`);
-      } else {
+      } else if (engine === 'act') {
         ui.info(`Event: ${opts.event}`);
+      } else {
+        if (opts.repo) ui.info(`Repo: ${opts.repo}`);
+        if (opts.ref) ui.info(`Ref: ${opts.ref}`);
       }
 
       if (!path) throw new Error('Workflow path is required');
@@ -616,12 +634,15 @@ program
         workflowPath: path,
         image: opts.image,
         jobId: opts.job,
-        engine: engine as 'builtin' | 'act',
+        engine: engine as 'builtin' | 'act' | 'github',
         eventName: opts.event,
         eventPath: opts.eventpath,
         secretFile: opts.secretFile,
         varsFile: opts.varFile,
         platforms: opts.platform,
+        repo: opts.repo,
+        ref: opts.ref,
+        inputs,
         dockerConfig,
       });
 

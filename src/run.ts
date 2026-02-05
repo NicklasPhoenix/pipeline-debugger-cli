@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import yaml from 'js-yaml';
 import { executeWorkflowInDocker } from './lib/docker-executor.js';
 import { executeWorkflowWithAct } from './lib/act-executor.js';
+import { executeWorkflowWithGitHub } from './lib/gh-executor.js';
 import { type DockerConfig } from './lib/docker-config.js';
 
 type WorkflowStep = {
@@ -40,12 +41,15 @@ export async function runWorkflowFile(params: {
   workflowPath: string;
   image?: string;
   jobId?: string;
-  engine?: 'builtin' | 'act';
+  engine?: 'builtin' | 'act' | 'github';
   eventName?: string;
   eventPath?: string;
   secretFile?: string;
   varsFile?: string;
   platforms?: string[];
+  repo?: string;
+  ref?: string;
+  inputs?: Record<string, string>;
   workdir?: string;
   dockerConfig?: DockerConfig;
 }): Promise<number> {
@@ -53,21 +57,36 @@ export async function runWorkflowFile(params: {
     workflowPath,
     image,
     jobId,
-    engine = 'builtin',
+    engine = 'act',
     eventName,
     eventPath,
     secretFile,
     varsFile,
     platforms,
+    repo,
+    ref,
+    inputs,
   } = params;
+
+  const workdir = params.workdir ?? process.cwd();
+
+  if (engine === 'github') {
+    console.log(`Workflow: ${workflowPath}`);
+    const result = await executeWorkflowWithGitHub({
+      workflowPath,
+      repo,
+      ref,
+      inputs,
+      workdir,
+    });
+    return result.exitCode;
+  }
 
   const content = await readFile(workflowPath, 'utf8');
   const doc = yaml.load(content) as WorkflowDoc;
   const picked = pickJob(doc, jobId);
 
   console.log(`Workflow: ${doc.name ?? '(unnamed)'} | Job: ${picked.jobId}${picked.job.name ? ` (${picked.job.name})` : ''}`);
-
-  const workdir = params.workdir ?? process.cwd();
 
   if (engine === 'act') {
     const result = await executeWorkflowWithAct({
