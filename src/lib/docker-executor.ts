@@ -91,7 +91,7 @@ export async function executeWorkflowInDocker(
 
       if (step.uses && !step.run) {
         push(`\n==> ${label}\n`);
-        push(`(skip) action step not supported in MVP: uses: ${step.uses}\n`);
+        push(`(skip) action step not supported: uses: ${step.uses}\n`);
         continue;
       }
 

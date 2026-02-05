@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        run: echo "(MVP) checkout not implemented; add your own steps"
+        run: echo "Checkout not implemented; add your own steps"
 
       - name: Install deps
         run: npm ci
