@@ -75,6 +75,13 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
 
   await server.register(websocket);
 
+  server.addHook('onSend', async (req, reply, payload) => {
+    if (req.headers.origin) {
+      reply.header('Access-Control-Allow-Private-Network', 'true');
+    }
+    return payload;
+  });
+
   const runs = new Map<string, RunRecord>();
   const clients = new Set<WsClient>();
 
