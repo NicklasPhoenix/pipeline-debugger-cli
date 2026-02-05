@@ -6,6 +6,16 @@ export type CliConfig = {
   token?: string;
   /** Local daemon auth token used by the web dashboard to talk to localhost */
   daemonToken?: string;
+
+  // Project registry (local-only)
+  projects?: Array<{
+    id: string;
+    name: string;
+    rootPath: string;
+    addedAt: number;
+    lastUsedAt?: number;
+  }>;
+  activeProjectId?: string;
 };
 
 const CONFIG_DIR = join(homedir(), '.pipeline-debugger');

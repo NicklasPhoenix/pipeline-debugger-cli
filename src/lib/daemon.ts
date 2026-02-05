@@ -5,6 +5,10 @@ import { nanoid } from 'nanoid';
 
 import { getConfig, saveConfig } from './config.js';
 import { executeWorkflowInDocker, type WorkflowStep } from './docker-executor.js';
+import { listProjects, selectProject, getActiveProject, type Project } from './projects.js';
+import { scanWorkflows } from './workflow-scan.js';
+import { loadWorkflowDoc, pickJob } from './workflow-parse.js';
+import { join, resolve } from 'node:path';
 
 export type DaemonConfig = {
   host?: string;
@@ -19,8 +23,12 @@ type RunRecord = {
   createdAt: number;
   updatedAt: number;
   status: RunStatus;
+
+  projectId?: string;
+  projectRoot?: string;
   workflowPath?: string;
   jobId?: string;
+
   image: string;
   steps: WorkflowStep[];
   exitCode?: number;
@@ -106,19 +114,64 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
     };
   });
 
+  server.get('/projects', async (req) => {
+    authOrThrow(req);
+    return listProjects();
+  });
+
+  server.post('/projects/select', async (req: any) => {
+    authOrThrow(req);
+    const body = (req.body ?? {}) as { projectId?: string };
+    if (!body.projectId) {
+      return { ok: false, error: 'projectId required' };
+    }
+    const proj = selectProject(body.projectId);
+    return { ok: true, project: proj };
+  });
+
+  server.get('/workflows', async (req: any) => {
+    authOrThrow(req);
+    const active = getActiveProject();
+    if (!active) {
+      return { workflows: [] as any[], activeProject: null };
+    }
+    const workflows = await scanWorkflows(active.rootPath);
+    return { workflows: workflows.map((w) => ({ path: w.path, fileName: w.fileName })), activeProject: active };
+  });
+
   server.post('/runs', async (req: any) => {
     authOrThrow(req);
 
     const body = (req.body ?? {}) as {
       image?: string;
+      // Either supply explicit steps, OR supply workflowPath + jobId and we'll parse.
       steps?: WorkflowStep[];
       workflowPath?: string;
       jobId?: string;
+      projectId?: string;
     };
 
     const id = nanoid(12);
     const image = body.image ?? 'ubuntu:latest';
-    const steps = body.steps ?? [];
+
+    let project: Project | null = null;
+    if (body.projectId) {
+      project = selectProject(body.projectId);
+    } else {
+      project = getActiveProject();
+    }
+
+    let steps: WorkflowStep[] = body.steps ?? [];
+
+    if (steps.length === 0 && body.workflowPath) {
+      if (!project) {
+        throw new Error('No active project. Run: pdbg project add <path>');
+      }
+      const abs = resolve(join(project.rootPath, body.workflowPath));
+      const doc = await loadWorkflowDoc(abs);
+      const picked = pickJob(doc, body.jobId);
+      steps = (picked.job.steps ?? []) as WorkflowStep[];
+    }
 
     const run: RunRecord = {
       id,
@@ -129,6 +182,8 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
       steps,
       workflowPath: body.workflowPath,
       jobId: body.jobId,
+      projectId: project?.id,
+      projectRoot: project?.rootPath,
     };
 
     runs.set(id, run);

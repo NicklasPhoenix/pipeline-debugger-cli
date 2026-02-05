@@ -10,6 +10,7 @@ import { ui } from './lib/ui.js';
 import { listWorkflows } from './lib/workflows.js';
 import { initWorkflow } from './lib/init.js';
 import { startDaemon } from './lib/daemon.js';
+import { addProject, listProjects, removeProject, selectProject } from './lib/projects.js';
 
 const program = new Command();
 
@@ -164,6 +165,51 @@ program
   });
 
 program
+  .command('project')
+  .description('Manage local projects (repo roots)')
+  .command('add')
+  .argument('[path]', 'Project root path (defaults to cwd)')
+  .action((path) => {
+    const p = addProject(path ?? process.cwd());
+    ui.success(`Project added: ${p.name}`);
+    ui.code(`${p.id}  ${p.rootPath}`);
+  });
+
+program
+  .command('projects')
+  .description('List local projects')
+  .action(() => {
+    const { projects, activeProjectId } = listProjects();
+    if (projects.length === 0) {
+      ui.info('No projects registered.');
+      ui.code('Run: pdbg project add');
+      return;
+    }
+    for (const p of projects) {
+      const active = p.id === activeProjectId ? '*' : ' ';
+      process.stdout.write(`${active} ${p.name}  ${p.id}  ${p.rootPath}\n`);
+    }
+  });
+
+program
+  .command('project-select')
+  .description('Select active project')
+  .argument('<id>', 'Project id')
+  .action((id) => {
+    const p = selectProject(id);
+    ui.success(`Active project: ${p.name}`);
+  });
+
+program
+  .command('project-rm')
+  .description('Remove a project')
+  .argument('<id>', 'Project id')
+  .action((id) => {
+    removeProject(id);
+    ui.success('Project removed');
+  });
+
+program
   .command('daemon')
   .description('Start local runner API for the web dashboard (localhost)')
   .option('--host <host>', 'Bind host', '127.0.0.1')
@@ -177,7 +223,7 @@ program
 
     ui.success(`Local runner listening on http://${srv.host}:${srv.port}`);
     ui.code(`Token (dashboard): ${srv.token}`);
-    ui.info('Open the dashboard and paste the token to connect.');
+    ui.info('Tip: register a project with `pdbg project add` so the dashboard can scan workflows.');
 
     // keep process alive
     await new Promise(() => {});
