@@ -38,6 +38,7 @@ export async function runWorkflowFile(params: {
   workflowPath: string;
   image: string;
   jobId?: string;
+  workdir?: string;
 }): Promise<number> {
   const { workflowPath, image, jobId } = params;
 
@@ -50,9 +51,12 @@ export async function runWorkflowFile(params: {
   console.log(`Workflow: ${doc.name ?? '(unnamed)'} | Job: ${picked.jobId}${picked.job.name ? ` (${picked.job.name})` : ''}`);
   console.log(`Image: ${image}`);
 
+  const workdir = params.workdir ?? process.cwd();
+
   const result = await executeWorkflowInDocker({
     image,
     steps,
+    workdir,
   });
 
   return result.exitCode;

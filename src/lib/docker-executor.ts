@@ -11,6 +11,8 @@ export type WorkflowStep = {
 type ExecuteWorkflowInDockerParams = {
   image: string;
   steps: WorkflowStep[];
+  /** Host path to mount at /work inside the container. */
+  workdir?: string;
   /** Optional output sink. If omitted, output is written to stdout. */
   onOutput?: (chunk: string) => void;
 };
@@ -18,7 +20,7 @@ type ExecuteWorkflowInDockerParams = {
 export async function executeWorkflowInDocker(
   params: ExecuteWorkflowInDockerParams
 ): Promise<{ exitCode: number; log: string }> {
-  const { image, steps, onOutput } = params;
+  const { image, steps, onOutput, workdir } = params;
 
   const chunks: string[] = [];
   const push = (s: string) => {
@@ -30,6 +32,10 @@ export async function executeWorkflowInDocker(
       // ignore
     }
   };
+  const binds = workdir ? [`${workdir}:/work`] : undefined;
+  if (workdir) {
+    push(`Using workspace: ${workdir}\n`);
+  }
 
   const docker = new Docker();
 
@@ -66,6 +72,7 @@ export async function executeWorkflowInDocker(
     WorkingDir: '/work',
     HostConfig: {
       AutoRemove: true,
+      Binds: binds,
     },
   });
 

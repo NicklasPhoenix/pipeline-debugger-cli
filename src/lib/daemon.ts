@@ -214,6 +214,7 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
         const result = await executeWorkflowInDocker({
           image: run.image,
           steps: run.steps,
+          workdir: run.projectRoot,
         });
 
         run.exitCode = result.exitCode;
