@@ -44,7 +44,8 @@
     "js-yaml": "^4.1.1",
     "nanoid": "^5.1.6",
     "open": "^11.0.0",
-    "ora": "^9.2.0"
+    "ora": "^9.2.0",
+    "selfsigned": "^5.5.0"
   },
   "devDependencies": {
     "@types/dockerode": "^4.0.1",

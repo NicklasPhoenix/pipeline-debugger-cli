@@ -9,11 +9,13 @@ import { listProjects, selectProject, getActiveProject, type Project } from './p
 import { scanWorkflows } from './workflow-scan.js';
 import { loadWorkflowDoc, pickJob } from './workflow-parse.js';
 import { join, resolve } from 'node:path';
+import { ensureLocalhostCert } from './tls.js';
 
 export type DaemonConfig = {
   host?: string;
   port?: number;
   allowedOrigins?: string[];
+  https?: boolean;
 };
 
 type RunStatus = 'queued' | 'running' | 'success' | 'failed';
@@ -59,9 +61,13 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
   }
   const daemonToken = localCfg.daemonToken;
 
+  const https = cfg.https ?? false;
+  const tls = https ? await ensureLocalhostCert() : null;
+
   const server = Fastify({
     logger: false,
-  });
+    ...(https && tls ? { https: { key: tls.key, cert: tls.cert } } : {}),
+  } as any);
 
   await server.register(cors, {
     origin: (origin, cb) => {
