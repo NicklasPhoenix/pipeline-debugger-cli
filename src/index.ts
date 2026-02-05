@@ -9,6 +9,7 @@ import { deviceLogin } from './lib/device-login.js';
 import { ui } from './lib/ui.js';
 import { listWorkflows } from './lib/workflows.js';
 import { initWorkflow } from './lib/init.js';
+import { startDaemon } from './lib/daemon.js';
 
 const program = new Command();
 
@@ -160,6 +161,26 @@ program
       ui.error((e as Error).message);
       process.exitCode = 1;
     }
+  });
+
+program
+  .command('daemon')
+  .description('Start local runner API for the web dashboard (localhost)')
+  .option('--host <host>', 'Bind host', '127.0.0.1')
+  .option('--port <port>', 'Bind port', '17889')
+  .action(async (opts) => {
+    ui.title('Pipeline Debugger — Local Runner');
+    const host = String(opts.host ?? '127.0.0.1');
+    const port = Number(opts.port ?? 17889);
+
+    const srv = await startDaemon({ host, port });
+
+    ui.success(`Local runner listening on http://${srv.host}:${srv.port}`);
+    ui.code(`Token (dashboard): ${srv.token}`);
+    ui.info('Open the dashboard and paste the token to connect.');
+
+    // keep process alive
+    await new Promise(() => {});
   });
 
 program.parseAsync(process.argv).catch((err) => {

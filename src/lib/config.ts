@@ -4,6 +4,8 @@ import { join } from 'node:path';
 
 export type CliConfig = {
   token?: string;
+  /** Local daemon auth token used by the web dashboard to talk to localhost */
+  daemonToken?: string;
 };
 
 const CONFIG_DIR = join(homedir(), '.pipeline-debugger');
