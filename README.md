@@ -17,6 +17,9 @@ pdbg login
 # in your repo
 pdbg project add
 pdbg daemon
+
+# sanity check
+pdbg doctor
 ```
 
 Open https://pipeline-debugger.vercel.app/dashboard and paste the token printed by `pdbg daemon`.
@@ -26,12 +29,13 @@ Open https://pipeline-debugger.vercel.app/dashboard and paste the token printed 
 - `pdbg project add [path]` – register a repo (defaults to cwd)
 - `pdbg projects` – list projects
 - `pdbg daemon` – start local runner API on http://127.0.0.1:17889
-- `pdbg run <workflow.yml>` – run a workflow file directly (MVP)
+- `pdbg doctor` – check Docker, auth, and local runner status
+- `pdbg run <workflow.yml>` – run a workflow file directly
 
 ## Notes
 
-- MVP supports only `jobs.<job>.steps[].run` commands.
-- `uses:` steps are currently skipped.
+- Currently supports `jobs.<job>.steps[].run` commands.
+- `uses:` steps are skipped.
 
 ## License
 

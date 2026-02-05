@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
+import Docker from 'dockerode';
 import { runWorkflowFile } from './run.js';
 import { getConfig, clearConfig, setToken } from './lib/config.js';
 import { deviceLogin } from './lib/device-login.js';
@@ -63,6 +64,75 @@ program
     ui.code(`Token: ${chalk.gray(cfg.token.slice(0, 6) + '…' + cfg.token.slice(-4))}`);
 
     if (opts.remote) {
+      const spin = ui.spinner('Checking token with web API…');
+      try {
+        const res = await fetch(`${opts.api}/api/workflows`, {
+          headers: { Authorization: `Bearer ${cfg.token}` },
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`Remote auth check failed (${res.status}): ${text}`);
+        }
+        const data = (await res.json()) as { workflows: unknown[] };
+        spin.succeed(`Remote API check OK (workflows: ${data.workflows.length})`);
+      } catch (e) {
+        spin.fail('Remote API check failed');
+        ui.error((e as Error).message);
+        process.exitCode = 1;
+      }
+    }
+  });
+
+program
+  .command('doctor')
+  .description('Check local setup (Docker, auth, daemon)')
+  .option('--api <url>', 'Web API base URL', 'https://pipeline-debugger.vercel.app')
+  .option('--daemon <url>', 'Local daemon URL', 'http://127.0.0.1:17889')
+  .option('--remote', 'Verify token with web API')
+  .action(async (opts) => {
+    ui.title('Doctor');
+    const cfg = getConfig();
+
+    if (cfg.token) {
+      ui.success('Auth token present');
+    } else {
+      ui.warn('Auth token missing');
+      ui.code('Run: pdbg login');
+    }
+
+    const dockerSpin = ui.spinner('Checking Docker…');
+    try {
+      const docker = new Docker();
+      await docker.ping();
+      dockerSpin.succeed('Docker reachable');
+    } catch (e) {
+      dockerSpin.fail('Docker not reachable');
+      ui.error((e as Error).message);
+      process.exitCode = 1;
+    }
+
+    if (cfg.daemonToken) {
+      const daemonSpin = ui.spinner('Checking local runner…');
+      try {
+        const res = await fetch(`${opts.daemon}/status`, {
+          headers: { 'X-PDBG-Token': cfg.daemonToken },
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`Local runner failed (${res.status}): ${text}`);
+        }
+        daemonSpin.succeed('Local runner OK');
+      } catch (e) {
+        daemonSpin.fail('Local runner not reachable');
+        ui.error((e as Error).message);
+        process.exitCode = 1;
+      }
+    } else {
+      ui.warn('Local runner token missing');
+      ui.code('Run: pdbg daemon');
+    }
+
+    if (opts.remote && cfg.token) {
       const spin = ui.spinner('Checking token with web API…');
       try {
         const res = await fetch(`${opts.api}/api/workflows`, {
