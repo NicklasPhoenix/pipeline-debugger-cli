@@ -11,10 +11,25 @@ export type WorkflowStep = {
 type ExecuteWorkflowInDockerParams = {
   image: string;
   steps: WorkflowStep[];
+  /** Optional output sink. If omitted, output is written to stdout. */
+  onOutput?: (chunk: string) => void;
 };
 
-export async function executeWorkflowInDocker(params: ExecuteWorkflowInDockerParams): Promise<{ exitCode: number }> {
-  const { image, steps } = params;
+export async function executeWorkflowInDocker(
+  params: ExecuteWorkflowInDockerParams
+): Promise<{ exitCode: number; log: string }> {
+  const { image, steps, onOutput } = params;
+
+  const chunks: string[] = [];
+  const push = (s: string) => {
+    chunks.push(s);
+    try {
+      if (onOutput) onOutput(s);
+      else process.stdout.write(s);
+    } catch {
+      // ignore
+    }
+  };
 
   const docker = new Docker();
 
@@ -32,7 +47,7 @@ export async function executeWorkflowInDocker(params: ExecuteWorkflowInDockerPar
 
   // Pull image best-effort
   try {
-    process.stdout.write(`Pulling image ${image}...\n`);
+    push(`Pulling image ${image}...\n`);
     const stream = await docker.pull(image);
     await new Promise<void>((resolve, reject) => {
       docker.modem.followProgress(stream, (err: unknown) => {
@@ -41,7 +56,7 @@ export async function executeWorkflowInDocker(params: ExecuteWorkflowInDockerPar
       });
     });
   } catch (e) {
-    process.stdout.write(`(warn) failed to pull ${image}; will try local cache. ${(e as Error).message}\n`);
+    push(`(warn) failed to pull ${image}; will try local cache. ${(e as Error).message}\n`);
   }
 
   const container = await docker.createContainer({
@@ -65,31 +80,31 @@ export async function executeWorkflowInDocker(params: ExecuteWorkflowInDockerPar
       const label = step.name ?? step.run ?? step.uses ?? `Step ${i + 1}`;
 
       if (step.uses && !step.run) {
-        process.stdout.write(`\n==> ${label}\n`);
-        process.stdout.write(`(skip) action step not supported in MVP: uses: ${step.uses}\n`);
+        push(`\n==> ${label}\n`);
+        push(`(skip) action step not supported in MVP: uses: ${step.uses}\n`);
         continue;
       }
 
       if (!step.run) {
-        process.stdout.write(`\n==> ${label}\n`);
-        process.stdout.write(`(skip) no run command\n`);
+        push(`\n==> ${label}\n`);
+        push(`(skip) no run command\n`);
         continue;
       }
 
-      process.stdout.write(`\n==> ${label}\n$ ${step.run}\n`);
+      push(`\n==> ${label}\n$ ${step.run}\n`);
       const code = await exec(container, step.run, {
         env: step.env,
-        onOutput: (chunk) => process.stdout.write(chunk),
+        onOutput: (chunk) => push(chunk),
       });
 
       if (code !== 0) {
-        process.stderr.write(`\n(step failed) exit code ${code}\n`);
+        push(`\n(step failed) exit code ${code}\n`);
         finalExit = code;
         break;
       }
     }
   } catch (e) {
-    process.stderr.write(`Executor error: ${(e as Error).stack ?? (e as Error).message}\n`);
+    push(`Executor error: ${(e as Error).stack ?? (e as Error).message}\n`);
     finalExit = 1;
   } finally {
     try {
@@ -99,7 +114,7 @@ export async function executeWorkflowInDocker(params: ExecuteWorkflowInDockerPar
     }
   }
 
-  return { exitCode: finalExit };
+  return { exitCode: finalExit, log: chunks.join('') };
 }
 
 async function exec(

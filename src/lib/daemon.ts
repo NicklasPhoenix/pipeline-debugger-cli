@@ -32,6 +32,9 @@ type RunRecord = {
   image: string;
   steps: WorkflowStep[];
   exitCode?: number;
+
+  // Combined log output (kept in memory)
+  log?: string;
 };
 
 type WsClient = {
@@ -110,8 +113,20 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
   server.get('/runs', async (req) => {
     authOrThrow(req);
     return {
-      runs: Array.from(runs.values()).sort((a, b) => b.createdAt - a.createdAt),
+      runs: Array.from(runs.values()).map((r) => ({
+        ...r,
+        // don't include full log in list
+        log: undefined,
+      })).sort((a, b) => b.createdAt - a.createdAt),
     };
+  });
+
+  server.get('/runs/:id', async (req: any) => {
+    authOrThrow(req);
+    const id = String(req.params.id);
+    const run = runs.get(id);
+    if (!run) return { error: 'not_found' };
+    return { run: { ...run, log: undefined }, log: run.log ?? '' };
   });
 
   server.get('/projects', async (req) => {
@@ -202,6 +217,7 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
         });
 
         run.exitCode = result.exitCode;
+        run.log = result.log;
         run.status = result.exitCode === 0 ? 'success' : 'failed';
         run.updatedAt = Date.now();
         broadcast({ type: 'run.finished', run });
