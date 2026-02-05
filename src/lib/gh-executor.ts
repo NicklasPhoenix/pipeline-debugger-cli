@@ -80,13 +80,18 @@ export async function executeWorkflowWithGitHub(
 
   const startTime = Date.now();
 
+  const missingGh = () => Object.assign(
+    new Error('gh is not installed. Install it from https://cli.github.com'),
+    { code: 'GH_MISSING' }
+  );
+
   await new Promise<void>((resolve, reject) => {
     const proc = spawn('gh', runArgs, { cwd: workdir, stdio: ['ignore', 'pipe', 'pipe'] });
     proc.stdout?.on('data', (buf: Buffer) => push(buf.toString('utf8')));
     proc.stderr?.on('data', (buf: Buffer) => push(buf.toString('utf8')));
     proc.on('error', (err) => {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        reject(new Error('gh is not installed. Install it from https://cli.github.com'));
+        reject(missingGh());
         return;
       }
       reject(err);
@@ -110,7 +115,7 @@ export async function executeWorkflowWithGitHub(
     proc.stderr?.on('data', (buf: Buffer) => push(buf.toString('utf8')));
     proc.on('error', (err) => {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        reject(new Error('gh is not installed. Install it from https://cli.github.com'));
+        reject(missingGh());
         return;
       }
       reject(err);

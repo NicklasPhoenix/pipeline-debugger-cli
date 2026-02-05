@@ -69,17 +69,27 @@ export async function runWorkflowFile(params: {
   } = params;
 
   const workdir = params.workdir ?? process.cwd();
+  let runEngine = engine;
 
-  if (engine === 'github') {
+  if (runEngine === 'github') {
     console.log(`Workflow: ${workflowPath}`);
-    const result = await executeWorkflowWithGitHub({
-      workflowPath,
-      repo,
-      ref,
-      inputs,
-      workdir,
-    });
-    return result.exitCode;
+    try {
+      const result = await executeWorkflowWithGitHub({
+        workflowPath,
+        repo,
+        ref,
+        inputs,
+        workdir,
+      });
+      return result.exitCode;
+    } catch (err) {
+      if ((err as { code?: string }).code === 'GH_MISSING') {
+        console.warn('gh not found; falling back to act');
+        runEngine = 'act';
+      } else {
+        throw err;
+      }
+    }
   }
 
   const content = await readFile(workflowPath, 'utf8');
@@ -88,7 +98,7 @@ export async function runWorkflowFile(params: {
 
   console.log(`Workflow: ${doc.name ?? '(unnamed)'} | Job: ${picked.jobId}${picked.job.name ? ` (${picked.job.name})` : ''}`);
 
-  if (engine === 'act') {
+  if (runEngine === 'act') {
     const result = await executeWorkflowWithAct({
       workflowPath,
       jobId: picked.jobId,

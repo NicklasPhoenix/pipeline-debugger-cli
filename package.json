@@ -1,6 +1,6 @@
 {
   "name": "pipeline-debugger-cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Pipeline Debugger CLI — run GitHub Actions workflows locally in Docker.",
   "type": "module",
   "bin": {

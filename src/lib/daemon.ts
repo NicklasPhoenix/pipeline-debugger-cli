@@ -297,9 +297,27 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
           dockerCaPath: cfg.dockerCaPath,
         };
 
-        const result =
-          run.engine === 'act'
-            ? await executeWorkflowWithAct({
+        let result: { exitCode: number; log: string };
+
+        if (run.engine === 'github') {
+          try {
+            result = await executeWorkflowWithGitHub({
+              workflowPath: run.projectRoot && run.workflowPath
+                ? resolve(join(run.projectRoot, run.workflowPath))
+                : String(run.workflowPath),
+              repo: run.repo,
+              ref: run.ref,
+              inputs: run.inputs,
+              workdir: run.projectRoot,
+              onOutput: (chunk) => appendLog(run, chunk),
+            });
+          } catch (err) {
+            if ((err as { code?: string }).code === 'GH_MISSING') {
+              appendLog(run, 'gh not found; falling back to act\n');
+              run.engine = 'act';
+              run.updatedAt = Date.now();
+              broadcast({ type: 'run.updated', run });
+              result = await executeWorkflowWithAct({
                 workflowPath: run.projectRoot && run.workflowPath
                   ? resolve(join(run.projectRoot, run.workflowPath))
                   : String(run.workflowPath),
@@ -312,25 +330,35 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
                 workdir: run.projectRoot,
                 dockerConfig,
                 onOutput: (chunk) => appendLog(run, chunk),
-              })
-            : run.engine === 'github'
-            ? await executeWorkflowWithGitHub({
-                workflowPath: run.projectRoot && run.workflowPath
-                  ? resolve(join(run.projectRoot, run.workflowPath))
-                  : String(run.workflowPath),
-                repo: run.repo,
-                ref: run.ref,
-                inputs: run.inputs,
-                workdir: run.projectRoot,
-                onOutput: (chunk) => appendLog(run, chunk),
-              })
-            : await executeWorkflowInDocker({
-                image: run.image ?? 'ubuntu:latest',
-                steps: run.steps ?? [],
-                workdir: run.projectRoot,
-                dockerConfig,
-                onOutput: (chunk) => appendLog(run, chunk),
               });
+            } else {
+              throw err;
+            }
+          }
+        } else if (run.engine === 'act') {
+          result = await executeWorkflowWithAct({
+            workflowPath: run.projectRoot && run.workflowPath
+              ? resolve(join(run.projectRoot, run.workflowPath))
+              : String(run.workflowPath),
+            jobId: run.jobId,
+            eventName: run.eventName,
+            eventPath: run.eventPath,
+            secretFile: run.secretFile,
+            varsFile: run.varsFile,
+            platforms: run.platforms,
+            workdir: run.projectRoot,
+            dockerConfig,
+            onOutput: (chunk) => appendLog(run, chunk),
+          });
+        } else {
+          result = await executeWorkflowInDocker({
+            image: run.image ?? 'ubuntu:latest',
+            steps: run.steps ?? [],
+            workdir: run.projectRoot,
+            dockerConfig,
+            onOutput: (chunk) => appendLog(run, chunk),
+          });
+        }
 
         run.exitCode = result.exitCode;
         if (!run.log) run.log = result.log;
