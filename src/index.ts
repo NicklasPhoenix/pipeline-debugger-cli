@@ -48,6 +48,95 @@ program
   });
 
 program
+  .command('start')
+  .description('Interactive setup wizard')
+  .option('--api <url>', 'Web API base URL', 'https://pipeline-debugger.vercel.app')
+  .option('--host <host>', 'Bind host', '127.0.0.1')
+  .option('--port <port>', 'Bind port', '17889')
+  .action(async (opts) => {
+    ui.title('Pipeline Debugger Setup');
+
+    const cfg = getConfig();
+    if (!cfg.token) {
+      const { doLogin } = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'doLogin',
+          message: 'Authenticate with the dashboard now?',
+          default: true,
+        },
+      ]);
+      if (doLogin) {
+        const spin = ui.spinner('Starting login…');
+        try {
+          const { token } = await deviceLogin({ apiBaseUrl: opts.api });
+          setToken(token);
+          spin.succeed('Logged in successfully');
+        } catch (e) {
+          spin.fail('Login failed');
+          ui.error((e as Error).message);
+        }
+      }
+    } else {
+      ui.success('Already authenticated');
+    }
+
+    const { addProjectNow } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'addProjectNow',
+        message: 'Register a project for the local runner?',
+        default: true,
+      },
+    ]);
+
+    if (addProjectNow) {
+      const { path } = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'path',
+          message: 'Project path',
+          default: process.cwd(),
+        },
+      ]);
+      try {
+        const p = addProject(path);
+        ui.success(`Project added: ${p.name}`);
+        ui.code(`${p.id}  ${p.rootPath}`);
+      } catch (e) {
+        ui.error((e as Error).message);
+      }
+    }
+
+    const { startNow } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'startNow',
+        message: 'Start local runner now?',
+        default: true,
+      },
+    ]);
+
+    if (startNow) {
+      const host = String(opts.host ?? '127.0.0.1');
+      const port = Number(opts.port ?? 17889);
+      try {
+        const srv = await startDaemon({ host, port });
+        ui.success(`Local runner listening on http://${srv.host}:${srv.port}`);
+        ui.code(`Token (dashboard): ${srv.token}`);
+        ui.info('Open the dashboard and paste the token to connect.');
+        // keep process alive
+        await new Promise(() => {});
+      } catch (e) {
+        ui.error((e as Error).message);
+        process.exitCode = 1;
+      }
+    } else {
+      ui.info('You can start the runner later with: pdbg daemon');
+    }
+  });
+
+program
   .command('status')
   .description('Show local CLI auth status')
   .option('--api <url>', 'Web API base URL', 'https://pipeline-debugger.vercel.app')

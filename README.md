@@ -11,10 +11,11 @@ npm install -g pipeline-debugger-cli
 ## Quickstart
 
 ```bash
-# (optional) login to the dashboard
-pdbg login
+# interactive setup wizard
+pdbg start
 
-# in your repo
+# or step-by-step
+pdbg login
 pdbg project add
 pdbg daemon
 
@@ -26,6 +27,7 @@ Open https://pipeline-debugger.vercel.app/dashboard and paste the token printed 
 
 ## Commands
 
+- `pdbg start` – interactive setup wizard
 - `pdbg project add [path]` – register a repo (defaults to cwd)
 - `pdbg projects` – list projects
 - `pdbg daemon` – start local runner API on http://127.0.0.1:17889
