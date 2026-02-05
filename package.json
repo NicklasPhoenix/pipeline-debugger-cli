@@ -4,8 +4,8 @@
   "description": "Pipeline Debugger CLI — run GitHub Actions workflows locally in Docker.",
   "type": "module",
   "bin": {
-    "pipeline-debugger": "./dist/index.js",
-    "pdbg": "./dist/index.js"
+    "pipeline-debugger": "dist/index.js",
+    "pdbg": "dist/index.js"
   },
   "files": [
     "dist"
