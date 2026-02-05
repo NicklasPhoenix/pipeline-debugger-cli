@@ -3,11 +3,11 @@
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import Docker from 'dockerode';
 import { exec as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runWorkflowFile } from './run.js';
-import { getConfig, clearConfig, setToken } from './lib/config.js';
+import { getConfig, clearConfig, setToken, setDockerConfig } from './lib/config.js';
+import { createDocker, type DockerConfig } from './lib/docker-config.js';
 import { deviceLogin } from './lib/device-login.js';
 import { ui } from './lib/ui.js';
 import { listWorkflows } from './lib/workflows.js';
@@ -47,6 +47,29 @@ async function runCmd(cmd: string) {
   }
 }
 
+function dockerConfigFrom(opts: any, cfg: ReturnType<typeof getConfig>): DockerConfig {
+  return {
+    dockerHost: opts?.dockerHost ?? cfg.dockerHost ?? process.env.DOCKER_HOST,
+    dockerTlsVerify: opts?.dockerTlsVerify ?? cfg.dockerTlsVerify ?? (process.env.DOCKER_TLS_VERIFY === '1'),
+    dockerCertPath: opts?.dockerCertPath ?? cfg.dockerCertPath ?? process.env.DOCKER_CERT_PATH,
+    dockerKeyPath: opts?.dockerKeyPath ?? cfg.dockerKeyPath,
+    dockerCaPath: opts?.dockerCaPath ?? cfg.dockerCaPath,
+  };
+}
+
+function persistDockerConfigFrom(opts: any) {
+  const update: any = {};
+  if (opts?.dockerHost !== undefined) update.dockerHost = opts.dockerHost || undefined;
+  if (opts?.dockerTlsVerify !== undefined) update.dockerTlsVerify = opts.dockerTlsVerify;
+  if (opts?.dockerCertPath !== undefined) update.dockerCertPath = opts.dockerCertPath || undefined;
+  if (opts?.dockerKeyPath !== undefined) update.dockerKeyPath = opts.dockerKeyPath || undefined;
+  if (opts?.dockerCaPath !== undefined) update.dockerCaPath = opts.dockerCaPath || undefined;
+
+  if (Object.keys(update).length > 0) {
+    setDockerConfig(update);
+  }
+}
+
 async function runStartWizard(opts: { api: string; host: string; port: number }) {
   ui.title('Pipeline Debugger Setup');
 
@@ -74,6 +97,82 @@ async function runStartWizard(opts: { api: string; host: string; port: number })
   } else {
     ui.success('Already authenticated');
   }
+
+  let dockerConfig = dockerConfigFrom({}, cfg);
+  const hasRemoteDocker = Boolean(dockerConfig.dockerHost);
+  const { useRemoteDocker } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'useRemoteDocker',
+      message: 'Use a remote Docker engine instead of local Docker?',
+      default: hasRemoteDocker,
+    },
+  ]);
+
+  if (useRemoteDocker) {
+    const { dockerHost } = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'dockerHost',
+        message: 'Remote Docker host (e.g. tcp://host:2376)',
+        default: dockerConfig.dockerHost ?? process.env.DOCKER_HOST ?? '',
+      },
+    ]);
+
+    if (dockerHost) {
+      const { tlsVerify } = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'tlsVerify',
+          message: 'Verify TLS (recommended)?',
+          default:
+            dockerConfig.dockerTlsVerify ??
+            (dockerHost.startsWith('https://') ||
+              dockerHost.includes(':2376') ||
+              process.env.DOCKER_TLS_VERIFY === '1'),
+        },
+      ]);
+
+      let certPath: string | undefined;
+      if (tlsVerify) {
+        const ans = await inquirer.prompt([
+          {
+            type: 'input',
+            name: 'certPath',
+            message: 'Path to Docker certs (DOCKER_CERT_PATH) — optional',
+            default: dockerConfig.dockerCertPath ?? process.env.DOCKER_CERT_PATH ?? '',
+          },
+        ]);
+        certPath = ans.certPath || undefined;
+      }
+
+      setDockerConfig({
+        dockerHost,
+        dockerTlsVerify: tlsVerify,
+        dockerCertPath: certPath,
+      });
+    }
+  } else if (hasRemoteDocker) {
+    const { clear } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'clear',
+        message: 'Clear saved remote Docker config?',
+        default: true,
+      },
+    ]);
+    if (clear) {
+      setDockerConfig({
+        dockerHost: undefined,
+        dockerTlsVerify: undefined,
+        dockerCertPath: undefined,
+        dockerKeyPath: undefined,
+        dockerCaPath: undefined,
+      });
+    }
+  }
+
+  dockerConfig = dockerConfigFrom({}, getConfig());
 
   const { addProjectNow } = await inquirer.prompt([
     {
@@ -123,7 +222,12 @@ async function runStartWizard(opts: { api: string; host: string; port: number })
       },
     ]);
     try {
-      const srv = await startDaemon({ host, port, https: useHttps });
+      const srv = await startDaemon({
+        host,
+        port,
+        https: useHttps,
+        ...dockerConfig,
+      });
       const scheme = useHttps ? 'https' : 'http';
       ui.success(`Local runner listening on ${scheme}://${srv.host}:${srv.port}`);
       ui.code(`Token (dashboard): ${srv.token}`);
@@ -142,7 +246,13 @@ async function runStartWizard(opts: { api: string; host: string; port: number })
   }
 }
 
-async function runDoctor(opts: { api: string; daemon: string; remote?: boolean; fix?: boolean }) {
+async function runDoctor(opts: {
+  api: string;
+  daemon: string;
+  remote?: boolean;
+  fix?: boolean;
+  dockerConfig?: DockerConfig;
+}) {
   ui.title('Doctor');
   ui.info(`Platform: ${platformLabel()}`);
 
@@ -155,92 +265,100 @@ async function runDoctor(opts: { api: string; daemon: string; remote?: boolean; 
     ui.code('Run: pdbg login');
   }
 
-  const dockerVersion = await runCmd('docker --version');
-  if (!dockerVersion.ok) {
-    ui.warn('Docker is not installed');
+  const dockerHost = opts.dockerConfig?.dockerHost ?? process.env.DOCKER_HOST;
+  if (dockerHost) {
+    ui.info(`Using remote Docker host: ${dockerHost}`);
+  }
 
-    if (opts.fix) {
-      const { install } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'install',
-          message: 'Install Docker prerequisites now? (requires admin rights)',
-          default: true,
-        },
-      ]);
+  if (!dockerHost) {
+    const dockerVersion = await runCmd('docker --version');
+    if (!dockerVersion.ok) {
+      ui.warn('Docker is not installed');
 
-      if (install) {
-        if (process.platform === 'win32') {
-          const wslStatus = await runCmd('wsl --status');
-          if (!wslStatus.ok) {
-            const { installWsl } = await inquirer.prompt([
-              {
-                type: 'confirm',
-                name: 'installWsl',
-                message: 'WSL not found. Install Ubuntu via WSL now?',
-                default: true,
-              },
-            ]);
-            if (installWsl) {
-              ui.info('Running: wsl --install -d Ubuntu');
-              await runCmd('wsl --install -d Ubuntu');
-              ui.warn('WSL install may require a reboot.');
+      if (opts.fix) {
+        const { install } = await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'install',
+            message: 'Install Docker prerequisites now? (requires admin rights)',
+            default: true,
+          },
+        ]);
+
+        if (install) {
+          if (process.platform === 'win32') {
+            const wslStatus = await runCmd('wsl --status');
+            if (!wslStatus.ok) {
+              const { installWsl } = await inquirer.prompt([
+                {
+                  type: 'confirm',
+                  name: 'installWsl',
+                  message: 'WSL not found. Install Ubuntu via WSL now?',
+                  default: true,
+                },
+              ]);
+              if (installWsl) {
+                ui.info('Running: wsl --install -d Ubuntu');
+                await runCmd('wsl --install -d Ubuntu');
+                ui.warn('WSL install may require a reboot.');
+              }
             }
-          }
 
-          const winget = await runCmd('winget --version');
-          if (winget.ok) {
-            const { installDocker } = await inquirer.prompt([
-              {
-                type: 'confirm',
-                name: 'installDocker',
-                message: 'Install Docker Desktop via winget?',
-                default: true,
-              },
-            ]);
-            if (installDocker) {
-              ui.info('Running: winget install -e --id Docker.DockerDesktop');
-              await runCmd('winget install -e --id Docker.DockerDesktop');
+            const winget = await runCmd('winget --version');
+            if (winget.ok) {
+              const { installDocker } = await inquirer.prompt([
+                {
+                  type: 'confirm',
+                  name: 'installDocker',
+                  message: 'Install Docker Desktop via winget?',
+                  default: true,
+                },
+              ]);
+              if (installDocker) {
+                ui.info('Running: winget install -e --id Docker.DockerDesktop');
+                await runCmd('winget install -e --id Docker.DockerDesktop');
+              }
+            } else {
+              ui.warn('winget not found. Install Docker Desktop manually: https://www.docker.com/products/docker-desktop/');
+            }
+          } else if (process.platform === 'darwin') {
+            const brew = await runCmd('brew --version');
+            if (brew.ok) {
+              const { installDocker } = await inquirer.prompt([
+                {
+                  type: 'confirm',
+                  name: 'installDocker',
+                  message: 'Install Docker Desktop via Homebrew?',
+                  default: true,
+                },
+              ]);
+              if (installDocker) {
+                ui.info('Running: brew install --cask docker');
+                await runCmd('brew install --cask docker');
+              }
+            } else {
+              ui.warn('Homebrew not found. Install Docker Desktop manually: https://www.docker.com/products/docker-desktop/');
             }
           } else {
-            ui.warn('winget not found. Install Docker Desktop manually: https://www.docker.com/products/docker-desktop/');
+            ui.warn('Automatic install not supported on Linux. See https://docs.docker.com/engine/install/');
           }
-        } else if (process.platform === 'darwin') {
-          const brew = await runCmd('brew --version');
-          if (brew.ok) {
-            const { installDocker } = await inquirer.prompt([
-              {
-                type: 'confirm',
-                name: 'installDocker',
-                message: 'Install Docker Desktop via Homebrew?',
-                default: true,
-              },
-            ]);
-            if (installDocker) {
-              ui.info('Running: brew install --cask docker');
-              await runCmd('brew install --cask docker');
-            }
-          } else {
-            ui.warn('Homebrew not found. Install Docker Desktop manually: https://www.docker.com/products/docker-desktop/');
-          }
-        } else {
-          ui.warn('Automatic install not supported on Linux. See https://docs.docker.com/engine/install/');
         }
       }
+    } else {
+      ui.success(dockerVersion.stdout.trim());
     }
-  } else {
-    ui.success(dockerVersion.stdout.trim());
-    const dockerSpin = ui.spinner('Checking Docker daemon…');
-    try {
-      const docker = new Docker();
-      await docker.ping();
-      dockerSpin.succeed('Docker daemon reachable');
-    } catch (e) {
-      dockerSpin.fail('Docker daemon not reachable');
-      ui.error((e as Error).message);
-      ui.info('Start Docker Desktop or your Docker daemon, then re-run pdbg doctor.');
-      process.exitCode = 1;
-    }
+  }
+
+  const dockerSpin = ui.spinner('Checking Docker daemon…');
+  try {
+    const docker = createDocker(opts.dockerConfig);
+    await docker.ping();
+    dockerSpin.succeed('Docker daemon reachable');
+  } catch (e) {
+    dockerSpin.fail('Docker daemon not reachable');
+    ui.error((e as Error).message);
+    ui.info('Start Docker Desktop or your Docker daemon, then re-run pdbg doctor.');
+    process.exitCode = 1;
   }
 
   if (cfg.daemonToken) {
@@ -338,16 +456,25 @@ program
   .option('--api <url>', 'Web API base URL', 'https://pipeline-debugger.vercel.app')
   .option('--host <host>', 'Bind host', '127.0.0.1')
   .option('--port <port>', 'Bind port', '17889')
+  .option('--docker-host <host>', 'Remote Docker engine (e.g. tcp://host:2376)')
+  .option('--docker-tls-verify', 'Verify TLS (uses DOCKER_CERT_PATH)')
+  .option('--docker-cert-path <path>', 'Path to Docker certs (directory)')
+  .option('--docker-key-path <path>', 'Path to Docker client key')
+  .option('--docker-ca-path <path>', 'Path to Docker CA cert')
   .option('--no-start', 'Skip setup wizard after checks')
   .action(async (opts) => {
     const port = Number(opts.port ?? 17889);
     const daemonUrl = `https://localhost:${port}`;
+
+    persistDockerConfigFrom(opts);
+    const dockerConfig = dockerConfigFrom(opts, getConfig());
 
     await runDoctor({
       api: opts.api,
       daemon: daemonUrl,
       fix: true,
       remote: false,
+      dockerConfig,
     });
 
     if (opts.start === false) return;
@@ -411,14 +538,22 @@ program
   .description('Check local setup (Docker, auth, daemon)')
   .option('--api <url>', 'Web API base URL', 'https://pipeline-debugger.vercel.app')
   .option('--daemon <url>', 'Local daemon URL', 'https://localhost:17889')
+  .option('--docker-host <host>', 'Remote Docker engine (e.g. tcp://host:2376)')
+  .option('--docker-tls-verify', 'Verify TLS (uses DOCKER_CERT_PATH)')
+  .option('--docker-cert-path <path>', 'Path to Docker certs (directory)')
+  .option('--docker-key-path <path>', 'Path to Docker client key')
+  .option('--docker-ca-path <path>', 'Path to Docker CA cert')
   .option('--remote', 'Verify token with web API')
   .option('--fix', 'Attempt to install missing requirements')
   .action(async (opts) => {
+    persistDockerConfigFrom(opts);
+    const dockerConfig = dockerConfigFrom(opts, getConfig());
     await runDoctor({
       api: opts.api,
       daemon: opts.daemon,
       remote: opts.remote,
       fix: opts.fix,
+      dockerConfig,
     });
   });
 
@@ -428,6 +563,11 @@ program
   .description('Run a workflow file locally in Docker')
   .option('--image <image>', 'Docker image to use', 'ubuntu:latest')
   .option('--job <jobId>', 'Job id to run (defaults to first job)')
+  .option('--docker-host <host>', 'Remote Docker engine (e.g. tcp://host:2376)')
+  .option('--docker-tls-verify', 'Verify TLS (uses DOCKER_CERT_PATH)')
+  .option('--docker-cert-path <path>', 'Path to Docker certs (directory)')
+  .option('--docker-key-path <path>', 'Path to Docker client key')
+  .option('--docker-ca-path <path>', 'Path to Docker CA cert')
   .action(async (workflowPath, opts) => {
     try {
       let path = workflowPath as string | undefined;
@@ -450,10 +590,14 @@ program
 
       if (!path) throw new Error('Workflow path is required');
 
+      persistDockerConfigFrom(opts);
+      const dockerConfig = dockerConfigFrom(opts, getConfig());
+
       const exitCode = await runWorkflowFile({
         workflowPath: path,
         image: opts.image,
         jobId: opts.job,
+        dockerConfig,
       });
 
       process.exitCode = exitCode;
@@ -556,19 +700,35 @@ program
   .option('--port <port>', 'Bind port', '17889')
   .option('--https', 'Serve over HTTPS (recommended for dashboard)', true)
   .option('--http', 'Serve over HTTP only (insecure)')
+  .option('--docker-host <host>', 'Remote Docker engine (e.g. tcp://host:2376)')
+  .option('--docker-tls-verify', 'Verify TLS (uses DOCKER_CERT_PATH)')
+  .option('--docker-cert-path <path>', 'Path to Docker certs (directory)')
+  .option('--docker-key-path <path>', 'Path to Docker client key')
+  .option('--docker-ca-path <path>', 'Path to Docker CA cert')
   .action(async (opts) => {
     ui.title('Pipeline Debugger — Local Runner');
     const host = String(opts.host ?? '127.0.0.1');
     const port = Number(opts.port ?? 17889);
     const useHttps = opts.http ? false : Boolean(opts.https ?? true);
 
-    const srv = await startDaemon({ host, port, https: useHttps });
+    persistDockerConfigFrom(opts);
+    const dockerConfig = dockerConfigFrom(opts, getConfig());
+
+    const srv = await startDaemon({
+      host,
+      port,
+      https: useHttps,
+      ...dockerConfig,
+    });
 
     const scheme = useHttps ? 'https' : 'http';
     ui.success(`Local runner listening on ${scheme}://${srv.host}:${srv.port}`);
     ui.code(`Token (dashboard): ${srv.token}`);
     if (useHttps) {
       ui.info(`If your browser warns about the certificate, open ${scheme}://${srv.host}:${srv.port}/status once and accept it.`);
+    }
+    if (dockerConfig.dockerHost) {
+      ui.info(`Using remote Docker host: ${dockerConfig.dockerHost}`);
     }
     ui.info('Tip: register a project with `pdbg project add` so the dashboard can scan workflows.');
 

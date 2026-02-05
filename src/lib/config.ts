@@ -16,6 +16,13 @@ export type CliConfig = {
     lastUsedAt?: number;
   }>;
   activeProjectId?: string;
+
+  // Optional remote Docker engine config
+  dockerHost?: string;
+  dockerTlsVerify?: boolean;
+  dockerCertPath?: string;
+  dockerKeyPath?: string;
+  dockerCaPath?: string;
 };
 
 const CONFIG_DIR = join(homedir(), '.pipeline-debugger');
@@ -39,6 +46,12 @@ export function saveConfig(cfg: CliConfig) {
 export function setToken(token: string) {
   const cfg = getConfig();
   cfg.token = token;
+  saveConfig(cfg);
+}
+
+export function setDockerConfig(partial: Partial<CliConfig>) {
+  const cfg = getConfig();
+  Object.assign(cfg, partial);
   saveConfig(cfg);
 }
 

@@ -1,5 +1,6 @@
 import Docker from 'dockerode';
 import { PassThrough } from 'node:stream';
+import { createDocker, type DockerConfig } from './docker-config.js';
 
 export type WorkflowStep = {
   name?: string;
@@ -13,6 +14,8 @@ type ExecuteWorkflowInDockerParams = {
   steps: WorkflowStep[];
   /** Host path to mount at /work inside the container. */
   workdir?: string;
+  /** Optional Docker config for remote engines. */
+  dockerConfig?: DockerConfig;
   /** Optional output sink. If omitted, output is written to stdout. */
   onOutput?: (chunk: string) => void;
 };
@@ -20,7 +23,7 @@ type ExecuteWorkflowInDockerParams = {
 export async function executeWorkflowInDocker(
   params: ExecuteWorkflowInDockerParams
 ): Promise<{ exitCode: number; log: string }> {
-  const { image, steps, onOutput, workdir } = params;
+  const { image, steps, onOutput, workdir, dockerConfig } = params;
 
   const chunks: string[] = [];
   const push = (s: string) => {
@@ -37,7 +40,7 @@ export async function executeWorkflowInDocker(
     push(`Using workspace: ${workdir}\n`);
   }
 
-  const docker = new Docker();
+  const docker = createDocker(dockerConfig);
 
   // Quick connectivity check so we can fail with a friendly message.
   try {

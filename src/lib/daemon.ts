@@ -16,6 +16,13 @@ export type DaemonConfig = {
   port?: number;
   allowedOrigins?: string[];
   https?: boolean;
+
+  // Optional Docker remote engine config
+  dockerHost?: string;
+  dockerTlsVerify?: boolean;
+  dockerCertPath?: string;
+  dockerKeyPath?: string;
+  dockerCaPath?: string;
 };
 
 type RunStatus = 'queued' | 'running' | 'success' | 'failed';
@@ -228,6 +235,13 @@ export async function startDaemon(cfg: DaemonConfig = {}) {
           image: run.image,
           steps: run.steps,
           workdir: run.projectRoot,
+          dockerConfig: {
+            dockerHost: cfg.dockerHost,
+            dockerTlsVerify: cfg.dockerTlsVerify,
+            dockerCertPath: cfg.dockerCertPath,
+            dockerKeyPath: cfg.dockerKeyPath,
+            dockerCaPath: cfg.dockerCaPath,
+          },
         });
 
         run.exitCode = result.exitCode;

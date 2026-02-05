@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import yaml from 'js-yaml';
 import { executeWorkflowInDocker } from './lib/docker-executor.js';
+import { type DockerConfig } from './lib/docker-config.js';
 
 type WorkflowStep = {
   name?: string;
@@ -39,6 +40,7 @@ export async function runWorkflowFile(params: {
   image: string;
   jobId?: string;
   workdir?: string;
+  dockerConfig?: DockerConfig;
 }): Promise<number> {
   const { workflowPath, image, jobId } = params;
 
@@ -57,6 +59,7 @@ export async function runWorkflowFile(params: {
     image,
     steps,
     workdir,
+    dockerConfig: params.dockerConfig,
   });
 
   return result.exitCode;

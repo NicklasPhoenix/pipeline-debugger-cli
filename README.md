@@ -38,6 +38,17 @@ Open https://pipeline-debugger.vercel.app/dashboard and paste the token printed 
 - `pdbg doctor` – check Docker, auth, and local runner status (`--fix` to install prerequisites)
 - `pdbg run <workflow.yml>` – run a workflow file directly
 
+## Remote Docker (optional)
+
+If your machine doesn’t have Docker, you can point the CLI to a remote Docker engine:
+
+```bash
+pdbg daemon --docker-host tcp://your-host:2376 --docker-tls-verify --docker-cert-path ~/.docker
+
+# or for a one-off run
+pdbg run .github/workflows/ci.yml --docker-host tcp://your-host:2376 --docker-tls-verify --docker-cert-path ~/.docker
+```
+
 ## Notes
 
 - Currently supports `jobs.<job>.steps[].run` commands.
